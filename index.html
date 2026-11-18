@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="uz"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Shashka Liga</title>
+<style>
+*{box-sizing:border-box}body{margin:0;font-family:system-ui,sans-serif;background:#1d2330;color:#e8ecf3}
+header{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:10px 14px;background:#12161f}
+header h1{font-size:18px;margin:0;flex:1}select,button,input,textarea{font:inherit;padding:6px 10px;border-radius:6px;border:1px solid #3a4560;background:#273047;color:#e8ecf3}
+button{cursor:pointer}button:hover{background:#34405e}button.p{background:#2f7d4f;border-color:#2f7d4f}button.r{background:#a33}
+main{display:grid;grid-template-columns:minmax(300px,1fr) minmax(320px,600px);gap:12px;padding:12px}
+@media(max-width:900px){main{grid-template-columns:1fr}}
+.card{background:#262e41;border-radius:10px;padding:12px;margin-bottom:12px}.card h3{margin:0 0 8px}
+table{width:100%;border-collapse:collapse;font-size:14px}th,td{padding:4px 6px;text-align:center}td:nth-child(2),th:nth-child(2){text-align:left}
+tr.q{background:#24533a}tr.x{background:#3a3f4d}th{color:#9fb0d0;font-weight:500}
+.m{display:flex;gap:8px;align-items:center;justify-content:space-between;padding:5px 0;border-top:1px solid #34405e;font-size:14px}.m.me{font-weight:600}
+.m small{color:#9fb0d0}.board{display:grid;grid-template-columns:repeat(8,1fr);width:min(100%,560px);aspect-ratio:1;margin:8px auto;border:4px solid #5a3a1e}
+.sq{position:relative;display:flex;align-items:center;justify-content:center}.sq.l{background:#f0d9b5}.sq.d{background:#b58863}
+.sq.sel{background:#e6c84a}.sq.lm{background:#c9b04a}.sq.ms{background:#d33}
+.sq.tg::after{content:"";width:28%;height:28%;border-radius:50%;background:rgba(40,160,80,.8);position:absolute}
+.pc{width:80%;height:80%;border-radius:50%;box-shadow:0 2px 4px #0008;display:flex;align-items:center;justify-content:center;font-size:clamp(14px,4vw,28px)}
+.pc.w{background:radial-gradient(#fff,#ddd 60%,#aaa);color:#a80}.pc.b{background:radial-gradient(#666,#222 60%,#000);color:#fc3}
+.pc.k::after{content:"♛"}.pc.tk{opacity:.35}
+.pl{padding:6px 10px;border-radius:6px;background:#1d2330;text-align:center}.pl.on{outline:2px solid #4c9;}
+.warn{background:#7a2230;padding:8px;border-radius:6px;margin:6px 0;text-align:center}
+#admin{display:none}#admin textarea{width:100%;height:110px}.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;align-items:center}
+.badge{font-size:12px;padding:3px 8px;border-radius:10px;background:#444}
+</style></head><body>
+<header><h1>♟ Shashka Liga</h1>
+<span class="badge" id="mode"></span>
+<label>Men: <select id="me"></select></label>
+<button id="adm">Admin</button></header>
+<div id="admin" class="card" style="margin:12px">
+<h3>Admin panel</h3>
+<textarea id="names" placeholder="Ishtirokchilar ismlari (har qatorda bittadan yoki vergul bilan)"></textarea>
+<div class="row"><label>Guruhda nechta kishi: <input id="gsize" type="number" min="2" max="8" value="3" style="width:70px"></label>
+<button class="p" onclick="makeGroups()">Guruhlarni shakllantirish</button>
+<button class="p" onclick="makeFinal()">Finalni boshlash (1-2 o'rinlar)</button>
+<button class="r" onclick="resetAll()">Hammasini o'chirish</button></div></div>
+<main><section id="left"></section><section id="right"></section></main>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+<script>
+/* ====== SOZLAMALAR ====== */
+// Firebase ma'lumotlarini (Realtime Database) shu yerga qo'ying. null bo'lsa - mahalliy rejim (sinash uchun, 2 ta oyna ochib ko'ring).
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyA_xvQSWZO3ftdzPLcBRQKoHbhP-JI_uJA",
+  authDomain: "shashka-liga-d72b3.firebaseapp.com",
+  databaseURL: "https://shashka-liga-d72b3-default-rtdb.firebaseio.com", // Realtime Database havolasi (Firebase konsolida tekshiring)
+  projectId: "shashka-liga-d72b3",
+  storageBucket: "shashka-liga-d72b3.firebasestorage.app",
+  messagingSenderId: "250735534965",
+  appId: "1:250735534965:web:b254f8c5aceeb09761e93c"
+};
+/* masalan:
+const FIREBASE_CONFIG = {apiKey:"...",authDomain:"...",databaseURL:"https://XXXX-default-rtdb.firebaseio.com",projectId:"...",appId:"..."};
+*/
+const ADMIN_PASS = "admin123"; // o'zgartiring
+
+/* ====== MA'LUMOTLAR QATLAMI ====== */
+let S = {league:{},games:{}};
+const norm = d => {d=d||{};d.league=d.league||{};d.games=d.games||{};return d;};
+const KEY='shashka_db';
+let DB;
+if (FIREBASE_CONFIG && typeof firebase!=='undefined'){
+  firebase.initializeApp(FIREBASE_CONFIG);
+  const ref=firebase.database().ref('shashka');
+  ref.on('value',s=>{S=norm(s.val());render();});
+  DB={update:p=>ref.update(p).catch(e=>alert("Firebase xatosi: "+e.message))};
+  mode.textContent='Onlayn (Firebase)';
+} else {
+  const setPath=(o,path,v)=>{const k=path.split('/');for(let i=0;i<k.length-1;i++)o=o[k[i]]=o[k[i]]||{};if(v===null)delete o[k[k.length-1]];else o[k[k.length-1]]=v;};
+  const load=()=>norm(JSON.parse(localStorage.getItem(KEY)||'null'));
+  DB={update:p=>{const d=load();for(const k in p)setPath(d,k,p[k]);localStorage.setItem(KEY,JSON.stringify(d));S=norm(d);render();}};
+  window.addEventListener('storage',e=>{if(e.key===KEY){S=load();render();}});
+  S=load();mode.textContent='Mahalliy rejim';
+}
+
+/* ====== SHASHKA MOTORI ====== */
+const D=[[1,1],[1,-1],[-1,1],[-1,-1]], inb=(r,c)=>r>=0&&r<8&&c>=0&&c<8, isDark=(r,c)=>(r+c)%2===1;
+const other=s=>s==='w'?'b':'w';
+const initBoard=()=>{let b='';for(let r=0;r<8;r++)for(let c=0;c<8;c++)b+=!isDark(r,c)?'.':r<3?'b':r>4?'w':'.';return b;};
+function jumps(B,i,taken){ // bitta urish qadamlari (orqaga ham, damka uchun uzoq masofaga)
+  const r=i>>3,c=i&7,p=B[i],me=p.toLowerCase(),king=p!==me,out=[];
+  for(const [dr,dc] of D){
+    if(!king){const r1=r+dr,c1=c+dc,r2=r+2*dr,c2=c+2*dc;
+      if(inb(r2,c2)){const q=B[r1*8+c1];if(q!=='.'&&q.toLowerCase()!==me&&!taken.has(r1*8+c1)&&B[r2*8+c2]==='.')out.push({to:r2*8+c2,cap:r1*8+c1,kind:'j'});}
+    }else{
+      let r1=r+dr,c1=c+dc;while(inb(r1,c1)&&B[r1*8+c1]==='.'){r1+=dr;c1+=dc;}
+      if(!inb(r1,c1))continue;const q=B[r1*8+c1];if(q.toLowerCase()===me||taken.has(r1*8+c1))continue;
+      let r2=r1+dr,c2=c1+dc;while(inb(r2,c2)&&B[r2*8+c2]==='.'){out.push({to:r2*8+c2,cap:r1*8+c1,kind:'j'});r2+=dr;c2+=dc;}
+    }
+  }
+  return out;
+}
+function steps(B,i){
+  const r=i>>3,c=i&7,p=B[i],me=p.toLowerCase(),king=p!==me,out=[];
+  for(const [dr,dc] of D){if(!king&&dr!==(me==='w'?-1:1))continue;
+    let r1=r+dr,c1=c+dc;while(inb(r1,c1)&&B[r1*8+c1]==='.'){out.push({to:r1*8+c1,cap:-1,kind:'m'});if(!king)break;r1+=dr;c1+=dc;}}
+  return out;
+}
+const mine=(B,s)=>{const a=[];for(let i=0;i<64;i++)if(B[i]!=='.'&&B[i].toLowerCase()===s)a.push(i);return a;};
+const capPieces=(B,s)=>mine(B,s).filter(i=>jumps(B,i,new Set()).length);
+function evaluate(B,turn){
+  const w=mine(B,'w').length,b=mine(B,'b').length;
+  if(!w)return{res:'b'};if(!b)return{res:'w'};
+  if(w===1&&b===1&&!/[WB]/.test(B))return{res:'d'};           // bittadan oddiy tosh - durrang
+  if(!mine(B,turn).some(i=>jumps(B,i,new Set()).length||steps(B,i).length))return{res:'d'}; // blok - durrang
+  return null;
+}
+function targets(g,i){
+  const B=g.b,taken=new Set(g.taken||[]),ch=g.chain==null?-1:g.chain;
+  if(ch>=0)return i===ch?jumps(B,i,taken):[];
+  const j=jumps(B,i,taken);return j.length?j:steps(B,i);
+}
+
+/* ====== HOLAT ====== */
+let me=localStorage.getItem('shashka_me')||'',openId=null,sel=null,chipMode=false,isAdmin=localStorage.getItem('shashka_admin')==='1';
+const $=id=>document.getElementById(id);
+const nm=id=>(S.league.participants||{})[id]||'?';
+const mySide=m=>m&&me?(m.a===me?'w':m.b===me?'b':null):null;
+function commit(id,ng,ev){
+  const p={};
+  if(ev){ng.over=true;ng.res=ev.res;const cnt=s=>mine(ng.b,s).length;
+    p['league/matches/'+id+'/status']='done';
+    p['league/matches/'+id+'/result']={w:ev.res==='w'?'a':ev.res==='b'?'b':'d',pa:cnt('w'),pb:cnt('b')};}
+  p['games/'+id]=ng;DB.update(p);
+}
+function startGame(id){
+  DB.update({['games/'+id]:{b:initBoard(),t:'w',chain:-1,taken:[],missed:[],over:false},['league/matches/'+id+'/status']:'play'});
+}
+function play(id,g,from,m){
+  const B=g.b.split(''),taken=[...(g.taken||[])];let p=B[from];B[from]='.';
+  const r2=m.to>>3;if(p==='w'&&r2===0)p='W';if(p==='b'&&r2===7)p='B';B[m.to]=p;
+  const ng={...g,missed:[],last:[from,m.to]};
+  if(m.kind==='j'){
+    taken.push(m.cap);
+    if(jumps(B.join(''),m.to,new Set(taken)).length){ng.b=B.join('');ng.taken=taken;ng.chain=m.to;commit(id,ng,null);return;}
+    taken.forEach(t=>B[t]='.');ng.taken=[];ng.chain=-1;
+  }else ng.missed=capPieces(g.b,g.t); // urish majburiy edi, lekin urmadi -> chippaki
+  ng.b=B.join('');ng.t=other(g.t);
+  commit(id,ng,evaluate(ng.b,ng.t));
+}
+function chippaki(i){
+  const g=S.games[openId],B=g.b.split('');B[i]='.';
+  const ng={...g,b:B.join(''),missed:[]};chipMode=false;sel=null;
+  commit(openId,ng,evaluate(ng.b,g.t));
+}
+function resign(){
+  if(!confirm("Taslim bo'lasizmi?"))return;
+  const g=S.games[openId],m=S.league.matches[openId],s=mySide(m);
+  commit(openId,{...g},{res:other(s)});
+}
+
+/* ====== LIGA ====== */
+function standings(gr){
+  const st={};gr.members.forEach(id=>st[id]={id,o:0,g:0,d:0,m:0,pts:0,diff:0});
+  Object.values(S.league.matches||{}).forEach(m=>{
+    if(m.grp!==gr.id||m.status!=='done')return;const A=st[m.a],B=st[m.b],r=m.result;A.o++;B.o++;
+    if(r.w==='d'){A.d++;B.d++;A.pts++;B.pts++;}
+    else if(r.w==='a'){A.g++;B.m++;A.pts+=3;A.diff+=r.pa;B.diff-=r.pa;}
+    else{B.g++;A.m++;B.pts+=3;B.diff+=r.pb;A.diff-=r.pb;}
+  });
+  return Object.values(st).sort((x,y)=>y.pts-x.pts||y.diff-x.diff||nm(x.id).localeCompare(nm(y.id)));
+}
+const shuffle=a=>{for(let i=a.length-1;i>0;i--){const j=Math.random()*(i+1)|0;[a[i],a[j]]=[a[j],a[i]];}return a;};
+function roundRobin(gid,members,matches){
+  for(let i=0;i<members.length;i++)for(let j=i+1;j<members.length;j++)
+    matches[gid+'_'+i+'_'+j]={a:members[i],b:members[j],grp:gid,status:'wait'};
+}
+function makeGroups(){
+  if(S.league.groups&&!confirm("Eski natijalar o'chadi. Davom etasizmi?"))return;
+  const raw=$('names').value;
+  let list=raw.split(/[\n,;]+/).map(s=>s.trim()).filter(Boolean);
+  if(list.length<2)list=raw.split(/\s+/).filter(Boolean); // bir qatorda bo'sh joy bilan yozilgan bo'lsa
+  const names=[...new Set(list)];
+  if(names.length<2)return alert("Kamida 2 ishtirokchi kerak");
+  isAdmin=true;localStorage.setItem('shashka_admin','1');
+  const size=Math.max(2,+$('gsize').value||3),parts={},ids=[];
+  names.forEach((n,i)=>{parts['p'+(i+1)]=n;ids.push('p'+(i+1));});
+  shuffle(ids);const k=Math.max(1,Math.ceil(ids.length/size)),G=Array.from({length:k},()=>[]);
+  ids.forEach((id,j)=>G[j%k].push(id));
+  const groups={},matches={};
+  G.forEach((mem,i)=>{const gid='g'+(i+1);groups[gid]={id:gid,name:String.fromCharCode(65+i)+" guruh",members:mem};roundRobin(gid,mem,matches);});
+  DB.update({league:{participants:parts,groups,matches,stage:'groups'},games:null});openId=null;
+}
+function makeFinal(){
+  const L=S.league;if(!L.groups||L.groups.F)return alert(L.groups?"Final allaqachon shakllangan":"Avval guruhlarni tuzing");
+  const gs=Object.values(L.groups);
+  const pending=Object.values(L.matches).some(m=>m.status!=='done');
+  if(pending&&!confirm("Hali tugamagan o'yinlar bor. Baribir finalni boshlaysizmi?"))return;
+  const q=[];gs.forEach(g=>standings(g).slice(0,2).forEach(s=>q.push(s.id)));
+  if(q.length<2)return alert("Finalchilar yetarli emas");
+  const matches={};roundRobin('F',q,matches);const p={'league/groups/F':{id:'F',name:"FINAL",members:q},'league/stage':'final'};
+  for(const k in matches)p['league/matches/'+k]=matches[k];DB.update(p);
+}
+function resetAll(){if(confirm("Hamma narsa o'chadi!")){DB.update({league:null,games:null});openId=null;}}
+
+/* ====== INTERFEYS ====== */
+function resText(m){const r=m.result;if(!r)return'';return r.w==='d'?"Durrang (1:1)":nm(r.w==='a'?m.a:m.b)+" yutdi (+"+(r.w==='a'?r.pa:r.pb)+" tosh)";}
+function renderLeft(){
+  const L=S.league;
+  if(!L.groups){$('left').innerHTML='<div class="card">Guruhlar hali shakllantirilmagan. Yuqoridagi maydonga ismlarni yozib, «Guruhlarni shakllantirish» tugmasini bosing.</div>';return;}
+  const gs=Object.values(L.groups).sort((a,b)=>a.id==='F'?-1:b.id==='F'?1:a.name.localeCompare(b.name));
+  let h='';
+  if(me){const my=Object.entries(L.matches||{}).filter(([,m])=>m.a===me||m.b===me);
+    if(my.length)h+=`<div class="card" style="border:2px solid #4c9"><h3>Mening o'yinlarim</h3>`+my.map(([id,m])=>`<div class="m"><span>Raqib: <b>${nm(m.a===me?m.b:m.a)}</b><br><small>${m.status==='done'?resText(m):m.status==='play'?"o'ynalmoqda":"kutilmoqda"}</small></span><button class="p" onclick="openM('${id}')">${m.status==='done'?"Ko'rish":"O'ynash"}</button></div>`).join('')+'</div>';}
+  else h+='<div class="card" style="background:#5c4a12">Tepadagi «Men» ro\'yxatidan ismingizni tanlang.</div>';
+  const F=L.groups.F;
+  if(F){const fm=Object.values(L.matches).filter(m=>m.grp==='F');if(fm.every(m=>m.status==='done'))h+=`<div class="card" style="background:#5c4a12;text-align:center;font-size:20px">🏆 G'olib: <b>${nm(standings(F)[0].id)}</b></div>`;}
+  for(const gr of gs){
+    const st=standings(gr);
+    h+=`<div class="card"><h3>${gr.name}</h3><table><tr><th>#</th><th>Ishtirokchi</th><th>O</th><th>G</th><th>D</th><th>M</th><th>Ochko</th><th>Tosh</th></tr>`;
+    st.forEach((s,k)=>{const cls=gr.id==='F'?(k===0?'q':''):(k<2?'q':'x');
+      h+=`<tr class="${cls}"><td>${k+1}</td><td>${nm(s.id)}</td><td>${s.o}</td><td>${s.g}</td><td>${s.d}</td><td>${s.m}</td><td><b>${s.pts}</b></td><td>${s.diff>0?'+':''}${s.diff}</td></tr>`;});
+    h+='</table>';
+    Object.entries(L.matches).filter(([,m])=>m.grp===gr.id).forEach(([id,m])=>{
+      const st2=m.status==='done'?resText(m):m.status==='play'?"o'ynalmoqda":"kutilmoqda";
+      const mineM=me&&(m.a===me||m.b===me);
+      h+=`<div class="m ${mineM?'me':''}"><span>⚪ ${nm(m.a)} — ⚫ ${nm(m.b)}<br><small>${st2}</small></span><button onclick="openM('${id}')">${mineM&&m.status!=='done'?"O'ynash":"Ko'rish"}</button></div>`;});
+    h+='</div>';
+  }
+  $('left').innerHTML=h;
+}
+function renderRight(){
+  const m=openId&&(S.league.matches||{})[openId];
+  if(!m){$('right').innerHTML='<div class="card">Chap tomondan o\'yinni tanlang.</div>';return;}
+  const g=S.games[openId],side=mySide(m);
+  let h='<div class="card">';
+  if(!g){
+    h+=`<h3>${nm(m.a)} (⚪) — ${nm(m.b)} (⚫)</h3>`;
+    h+=(side||isAdmin)?`<button class="p" onclick="startGame('${openId}')">O'yinni boshlash</button>`:"<p>O'yin hali boshlanmagan.</p>";
+    $('right').innerHTML=h+'</div>';return;
+  }
+  if(g.t!==side||g.over){sel=null;chipMode=false;}
+  const flip=side==='b',top=flip?{n:m.a,s:'w'}:{n:m.b,s:'b'},bot=flip?{n:m.b,s:'b'}:{n:m.a,s:'w'};
+  const pl=o=>`<div class="pl ${!g.over&&g.t===o.s?'on':''}">${o.s==='w'?'⚪':'⚫'} ${nm(o.n)} <small>(${mine(g.b,o.s).length} tosh)</small></div>`;
+  h+=pl(top);
+  const T=sel!=null?new Set(targets(g,sel).map(t=>t.to)):new Set(),tk=new Set(g.taken||[]),ms=new Set(g.missed||[]);
+  h+='<div class="board" id="bd">';
+  for(let k=0;k<64;k++){const i=flip?63-k:k,r=i>>3,c=i&7,p=g.b[i];
+    let cls='sq '+(isDark(r,c)?'d':'l');
+    if(i===sel)cls+=' sel';if(T.has(i))cls+=' tg';if(g.last&&(g.last[0]===i||g.last[1]===i))cls+=' lm';if(chipMode&&ms.has(i))cls+=' ms';
+    h+=`<div class="${cls}" data-i="${i}">${p!=='.'?`<div class="pc ${p.toLowerCase()} ${p!==p.toLowerCase()?'k':''} ${tk.has(i)?'tk':''}"></div>`:''}</div>`;}
+  h+='</div>'+pl(bot);
+  if(g.over)h+=`<div class="warn" style="background:#24533a">${resText(S.league.matches[openId])||'Tugadi'}</div>`;
+  else{
+    h+=`<p style="text-align:center">Navbat: <b>${nm(g.t==='w'?m.a:m.b)}</b>${g.t===side?" — sizning yurishingiz":""}${g.chain>=0&&g.t===side?"<br>Urishni davom ettiring!":""}</p>`;
+    if(g.missed&&g.missed.length&&g.t===side)h+=`<div class="warn">Raqib urishni o'tkazib yubordi! <button class="r" onclick="doChip()">Chippaki!</button></div>`;
+    if(side)h+=`<div class="row" style="justify-content:center"><button onclick="resign()">Taslim bo'lish</button></div>`;
+    if(!side)h+='<p style="text-align:center;color:#9fb0d0">Siz tomoshabinsiz</p>';
+  }
+  $('right').innerHTML=h+'</div>';
+}
+function render(){
+  $('admin').style.display=(isAdmin||!S.league.groups)?'block':'none'; // guruh yo'q bo'lsa birinchi kirgan tuzadi
+  const ps=S.league.participants||{};
+  $('me').innerHTML='<option value="">— kimligingiz —</option>'+Object.entries(ps).map(([id,n])=>`<option value="${id}" ${id===me?'selected':''}>${n}</option>`).join('');
+  renderLeft();renderRight();
+}
+function openM(id){openId=id;sel=null;chipMode=false;render();}
+function doChip(){const g=S.games[openId];if(g.missed.length===1)chippaki(g.missed[0]);else{chipMode=true;render();}}
+$('right').addEventListener('click',e=>{
+  const q=e.target.closest('.sq');if(!q)return;const i=+q.dataset.i,g=S.games[openId],m=S.league.matches[openId];
+  if(!g||g.over)return;const side=mySide(m);if(!side||g.t!==side)return;
+  if(chipMode){if((g.missed||[]).includes(i))chippaki(i);return;}
+  if(sel!=null){const t=targets(g,sel).find(t=>t.to===i);if(t){const f=sel;sel=null;play(openId,g,f,t);return;}}
+  const ch=g.chain==null?-1:g.chain;
+  sel=(g.b[i]!=='.'&&g.b[i].toLowerCase()===side&&(ch<0||ch===i))?i:null;render();
+});
+$('me').onchange=e=>{me=e.target.value;localStorage.setItem('shashka_me',me);render();};
+$('adm').onclick=()=>{if(isAdmin){isAdmin=false;localStorage.removeItem('shashka_admin');}else if(prompt("Admin paroli:")===ADMIN_PASS){isAdmin=true;localStorage.setItem('shashka_admin','1');}render();};
+render();
+</script></body></html>
